@@ -1,12 +1,12 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import time
 from collections import deque
 
 from fastapi import FastAPI, Request
-from fastapi.responses import JSONResponse
-from starlette.middleware.base import BaseHTTPMiddleware
+from starlette.types import ASGIApp, Receive, Scope, Send
 
 from config import settings
 
@@ -15,16 +15,29 @@ _store: dict[str, deque[float]] = {}
 _lock = asyncio.Lock()
 
 
-class RateLimitMiddleware(BaseHTTPMiddleware):
+class RateLimitMiddleware:
     """
     Sliding window rate limiter per client IP.
     Allows RATE_LIMIT_RPM requests per 60-second window.
+    Pure ASGI middleware — does NOT buffer the response body, avoiding the
+    BaseHTTPMiddleware double-serialization bug.
     """
 
-    async def dispatch(self, request: Request, call_next):
+    def __init__(self, app: ASGIApp) -> None:
+        self.app = app
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        if scope["type"] != "http":
+            await self.app(scope, receive, send)
+            return
+
+        from starlette.requests import Request as StarletteRequest
+        request = StarletteRequest(scope, receive)
+
         # Skip rate limiting for the health check endpoint
         if request.url.path == "/health":
-            return await call_next(request)
+            await self.app(scope, receive, send)
+            return
 
         ip = request.client.host if request.client else "unknown"
         now = time.monotonic()
@@ -42,14 +55,21 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
                 timestamps.popleft()
 
             if len(timestamps) >= limit:
-                return JSONResponse(
-                    status_code=429,
-                    content={"error": "Too many requests", "status": 429},
-                )
+                body = json.dumps({"error": "Too many requests", "status": 429}).encode()
+                await send({
+                    "type": "http.response.start",
+                    "status": 429,
+                    "headers": [
+                        [b"content-type", b"application/json"],
+                        [b"content-length", str(len(body)).encode()],
+                    ],
+                })
+                await send({"type": "http.response.body", "body": body})
+                return
 
             timestamps.append(now)
 
-        return await call_next(request)
+        await self.app(scope, receive, send)
 
 
 def add_rate_limit(app: FastAPI) -> None:

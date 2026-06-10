@@ -4,7 +4,7 @@ import logging
 import time
 
 from fastapi import FastAPI, Request
-from starlette.middleware.base import BaseHTTPMiddleware
+from starlette.types import ASGIApp, Receive, Scope, Send
 
 logger = logging.getLogger("api-gateway")
 logging.basicConfig(
@@ -13,16 +13,25 @@ logging.basicConfig(
 )
 
 
-class LoggingMiddleware(BaseHTTPMiddleware):
+class LoggingMiddleware:
     """
     Logs every request with method, path, target service, status code, and latency.
-    The Authorization header value is NEVER logged.
+    Pure ASGI middleware — does NOT buffer the response body, avoiding the
+    BaseHTTPMiddleware double-serialization bug.
     """
 
-    async def dispatch(self, request: Request, call_next):
-        start = time.monotonic()
+    def __init__(self, app: ASGIApp) -> None:
+        self.app = app
 
-        # Resolve service name for logging (best-effort — may be unknown for /health)
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        if scope["type"] != "http":
+            await self.app(scope, receive, send)
+            return
+
+        from starlette.requests import Request as StarletteRequest
+        request = StarletteRequest(scope, receive)
+
+        # Resolve service name for logging (best-effort)
         from router import ROUTE_TABLE
         service_name = "gateway"
         for prefix, _, name in ROUTE_TABLE:
@@ -30,7 +39,16 @@ class LoggingMiddleware(BaseHTTPMiddleware):
                 service_name = name
                 break
 
-        response = await call_next(request)
+        start = time.monotonic()
+        status_code = 500
+
+        async def send_wrapper(message):
+            nonlocal status_code
+            if message["type"] == "http.response.start":
+                status_code = message["status"]
+            await send(message)
+
+        await self.app(scope, receive, send_wrapper)
 
         latency_ms = round((time.monotonic() - start) * 1000)
         logger.info(
@@ -38,11 +56,9 @@ class LoggingMiddleware(BaseHTTPMiddleware):
             request.method,
             request.url.path,
             service_name,
-            response.status_code,
+            status_code,
             latency_ms,
         )
-
-        return response
 
 
 def add_logging(app: FastAPI) -> None:
