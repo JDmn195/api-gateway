@@ -62,11 +62,14 @@ async def proxy_request(
     if request.url.query:
         target_url += f"?{request.url.query}"
 
-    # Build forwarded headers — strip Authorization and hop-by-hop headers
+    # Build forwarded headers — strip Authorization, hop-by-hop, and Accept-Encoding
+    # so httpx receives an uncompressed response it can decompress automatically
     forward_headers = {
         k: v
         for k, v in request.headers.items()
-        if k.lower() not in _HOP_BY_HOP and k.lower() != "authorization"
+        if k.lower() not in _HOP_BY_HOP
+        and k.lower() != "authorization"
+        and k.lower() != "accept-encoding"
     }
 
     # Inject identity headers from validated JWT claims
@@ -92,10 +95,17 @@ async def proxy_request(
             content={"error": "Service unavailable", "status": 502, "service": service_name},
         )
 
-    # Return raw bytes directly — no parsing or re-serialization
-    raw = downstream.content
+    # Return decompressed bytes — httpx auto-decompresses gzip/deflate when
+    # accessing .content. Drop encoding/length headers so the browser doesn't
+    # try to decompress already-plain bytes.
+    response_headers = {
+        k: v
+        for k, v in downstream.headers.items()
+        if k.lower() not in {"content-encoding", "content-length", "transfer-encoding"}
+    }
     return Response(
-        content=raw,
+        content=downstream.content,
         status_code=downstream.status_code,
+        headers=response_headers,
         media_type=downstream.headers.get("content-type"),
     )
