@@ -11,6 +11,10 @@ from config import settings
 PUBLIC_ROUTES: set[tuple[str, str]] = {
     ("POST", "/api/auth/login"),
     ("POST", "/api/auth/register"),
+    ("GET",  "/api/auth/verify-email"),
+    ("GET",  "/api/auth/validate-token"),
+    ("POST", "/api/auth/forgot-password"),
+    ("POST", "/api/auth/reset-password"),
 }
 
 # ---------------------------------------------------------------------------
