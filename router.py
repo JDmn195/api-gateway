@@ -63,13 +63,14 @@ async def proxy_request(
         target_url += f"?{request.url.query}"
 
     # Build forwarded headers — strip Authorization, hop-by-hop, and Accept-Encoding
-    # so httpx receives an uncompressed response it can decompress automatically
+    # so httpx receives an uncompressed response it can decompress automatically.
+    # Exception: auth-service needs the original JWT for its own Spring Security filter.
     forward_headers = {
         k: v
         for k, v in request.headers.items()
         if k.lower() not in _HOP_BY_HOP
-        and k.lower() != "authorization"
         and k.lower() != "accept-encoding"
+        and (k.lower() != "authorization" or service_name == "auth-service")
     }
 
     # Inject identity headers from validated JWT claims
