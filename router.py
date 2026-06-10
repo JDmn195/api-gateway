@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import httpx
 from fastapi import Request
-from fastapi.responses import JSONResponse, StreamingResponse
+from fastapi.responses import JSONResponse, Response
 
 from config import settings
 
@@ -32,8 +32,8 @@ _HOP_BY_HOP = {
     "trailers",
 }
 
-# Response headers that should not be forwarded back to the client
-_DROP_RESPONSE_HEADERS = {"transfer-encoding", "content-encoding", "content-length"}
+# Response headers that should not be forwarded back to the client (unused — raw bytes returned directly)
+# _DROP_RESPONSE_HEADERS = {"transfer-encoding", "content-encoding", "content-length"}
 
 
 def resolve_service(path: str) -> tuple[str, str]:
@@ -53,9 +53,9 @@ async def proxy_request(
     base_url: str,
     service_name: str,
     claims: dict | None,
-) -> StreamingResponse | JSONResponse:
+) -> Response | JSONResponse:
     """
-    Forward the request to the downstream service and stream the response back.
+    Forward the request to the downstream service and return the raw response.
     """
     # Build target URL preserving the full path and query string
     target_url = base_url + str(request.url.path)
@@ -92,16 +92,10 @@ async def proxy_request(
             content={"error": "Service unavailable", "status": 502, "service": service_name},
         )
 
-    # Build response headers to send back to the client
-    response_headers = {
-        k: v
-        for k, v in downstream.headers.items()
-        if k.lower() not in _DROP_RESPONSE_HEADERS
-    }
-
-    return StreamingResponse(
-        content=iter([downstream.content]),
+    # Return raw bytes directly — no parsing or re-serialization
+    raw = downstream.content
+    return Response(
+        content=raw,
         status_code=downstream.status_code,
-        headers=response_headers,
         media_type=downstream.headers.get("content-type"),
     )
