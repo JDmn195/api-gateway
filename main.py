@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import logging
+
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 
@@ -8,6 +10,8 @@ from middleware.cors import add_cors
 from middleware.logging import add_logging
 from middleware.rate_limit import add_rate_limit
 from router import proxy_request, resolve_service
+
+logger = logging.getLogger(__name__)
 
 app = FastAPI(title="MicroShop API Gateway", version="1.0.0", docs_url=None, redoc_url=None)
 
@@ -29,6 +33,13 @@ async def health():
 @app.api_route("/{path:path}", methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"])
 async def gateway(request: Request, path: str):
     full_path = "/" + path  # restore leading slash
+
+    logger.info(
+        "DEBUG method=%s full_path=%s is_public=%s",
+        request.method,
+        full_path,
+        is_public(request.method, full_path),
+    )
 
     # 1. Block internal-only routes
     if is_internal(full_path):
